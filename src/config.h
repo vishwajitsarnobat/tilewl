@@ -28,7 +28,7 @@ static const float master_ratio = 0.55f;
 /* How much Mod+h / Mod+l change it per press. */
 #define RATIO_STEP 0.05f
 
-static const char *const termcmd[] = {"foot", NULL};
+static const char *const termcmd[] = {"alacritty", NULL};
 
 /*
  * Mod+N shows workspace N, Mod+Shift+N moves the focused window there.
