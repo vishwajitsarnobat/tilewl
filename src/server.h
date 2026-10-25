@@ -41,12 +41,6 @@
 #include <wlr/types/wlr_xdg_shell.h>
 #include <xkbcommon/xkbcommon.h>
 
-enum tilewl_cursor_mode {
-	TILEWL_CURSOR_PASSTHROUGH,
-	TILEWL_CURSOR_MOVE,
-	TILEWL_CURSOR_RESIZE,
-};
-
 struct tilewl_server {
 	struct wl_display *wl_display;
 	struct wlr_backend *backend;
@@ -59,20 +53,38 @@ struct tilewl_server {
 	 * The scene graph is a tree of nodes (trees, surface buffers, solid
 	 * rects). We only ever position, show and hide nodes; wlroots works out
 	 * damage and does the actual rendering.
+	 *
+	 * Children of a tree are drawn in order, so sibling trees act as
+	 * stacking layers. For now there is a single layer for tiled windows.
+	 *
+	 * TODO(layer-shell): add trees for the background, bottom, top and
+	 * overlay layers of wlr-layer-shell around `tiled`, in that order.
+	 * TODO(floating): add a `floating` tree above `tiled`.
 	 */
 	struct wlr_scene *scene;
 	struct wlr_scene_output_layout *scene_layout;
+	struct wlr_scene_tree *tiled;
 
 	/* Outputs (output.c) */
 	struct wlr_output_layout *output_layout;
 	struct wl_list outputs; /* tilewl_output.link */
 	struct wl_listener new_output;
+	struct wl_listener layout_change;
 
 	/* Application windows (xdg.c) */
 	struct wlr_xdg_shell *xdg_shell;
 	struct wl_listener new_xdg_toplevel;
 	struct wl_listener new_xdg_popup;
+	/*
+	 * Mapped toplevels in tiling order: the first entry is the master.
+	 * Keyboard focus is tracked separately so focusing a window does not
+	 * reorder the layout.
+	 */
 	struct wl_list toplevels; /* tilewl_toplevel.link */
+	struct tilewl_toplevel *focused;
+
+	/* Layout (layout.c) */
+	float master_ratio; /* fraction of the width given to the master */
 
 	/* Pointer (input.c) */
 	struct wlr_cursor *cursor;
@@ -82,6 +94,12 @@ struct tilewl_server {
 	struct wl_listener cursor_button;
 	struct wl_listener cursor_axis;
 	struct wl_listener cursor_frame;
+	/*
+	 * TODO(floating): interactive move/resize. tinywl kept a grab mode
+	 * here (cursor_mode, grabbed toplevel, grab offset and geometry,
+	 * resize edges). It only makes sense for floating windows, so it was
+	 * removed; bring it back together with the floating layer.
+	 */
 
 	/* Seat and keyboards (input.c) */
 	struct wlr_seat *seat;
@@ -89,13 +107,6 @@ struct tilewl_server {
 	struct wl_listener request_cursor;
 	struct wl_listener request_set_selection;
 	struct wl_list keyboards; /* tilewl_keyboard.link */
-
-	/* Interactive move/resize grab state (input.c) */
-	enum tilewl_cursor_mode cursor_mode;
-	struct tilewl_toplevel *grabbed_toplevel;
-	double grab_x, grab_y;
-	struct wlr_box grab_geobox;
-	uint32_t resize_edges;
 };
 
 struct tilewl_output {
@@ -105,13 +116,35 @@ struct tilewl_output {
 	struct wl_listener frame;
 	struct wl_listener request_state;
 	struct wl_listener destroy;
+	/*
+	 * TODO(multi-monitor): give each output its own current workspace and
+	 * tile its windows independently.
+	 * TODO(layer-shell): keep a usable_area here (the output box minus
+	 * exclusive zones of panels) and tile into that instead.
+	 */
 };
 
 struct tilewl_toplevel {
-	struct wl_list link;
+	struct wl_list link; /* server->toplevels, only while mapped */
 	struct tilewl_server *server;
 	struct wlr_xdg_toplevel *xdg_toplevel;
+
+	/*
+	 * Our own container tree, owned by us and destroyed in the destroy
+	 * handler. It holds the client's surface tree, so moving the container
+	 * moves everything inside it.
+	 */
 	struct wlr_scene_tree *scene_tree;
+	/*
+	 * Created by wlr_scene_xdg_surface_create(), owned by wlroots: it
+	 * destroys itself when the xdg_surface goes away.
+	 */
+	struct wlr_scene_tree *surface_tree;
+
+	struct wlr_box geometry; /* last size/position from the layout */
+	bool mapped;
+	/* TODO(floating): bool floating; skipped by the tiler. */
+
 	struct wl_listener map;
 	struct wl_listener unmap;
 	struct wl_listener commit;
@@ -168,21 +201,31 @@ void output_finish(struct tilewl_server *server);
 /* input.c */
 void input_init(struct tilewl_server *server);
 void input_finish(struct tilewl_server *server);
-void begin_interactive(struct tilewl_toplevel *toplevel,
-	enum tilewl_cursor_mode mode, uint32_t edges);
-void reset_cursor_mode(struct tilewl_server *server);
-
-/* Keybinding actions (input.c) */
-void spawn(struct tilewl_server *server, const union tilewl_arg *arg);
-void close_focused(struct tilewl_server *server, const union tilewl_arg *arg);
-void quit(struct tilewl_server *server, const union tilewl_arg *arg);
+void cursor_rebase(struct tilewl_server *server);
 
 /* xdg.c */
 void xdg_init(struct tilewl_server *server);
 void xdg_finish(struct tilewl_server *server);
-void focus_toplevel(struct tilewl_toplevel *toplevel);
+void focus_toplevel(struct tilewl_server *server,
+	struct tilewl_toplevel *toplevel);
+void toplevel_set_geometry(struct tilewl_toplevel *toplevel,
+	struct wlr_box box);
 struct tilewl_toplevel *toplevel_at(struct tilewl_server *server,
 	double lx, double ly, struct wlr_surface **surface,
 	double *sx, double *sy);
+
+/* layout.c */
+void arrange(struct tilewl_server *server);
+bool toplevel_is_visible(const struct tilewl_toplevel *toplevel);
+struct tilewl_toplevel *first_visible(struct tilewl_server *server);
+
+/* Keybinding actions, bound in config.h */
+void spawn(struct tilewl_server *server, const union tilewl_arg *arg);
+void close_focused(struct tilewl_server *server, const union tilewl_arg *arg);
+void quit(struct tilewl_server *server, const union tilewl_arg *arg);
+void focus_stack(struct tilewl_server *server, const union tilewl_arg *arg);
+void zoom(struct tilewl_server *server, const union tilewl_arg *arg);
+void set_master_ratio(struct tilewl_server *server,
+	const union tilewl_arg *arg);
 
 #endif

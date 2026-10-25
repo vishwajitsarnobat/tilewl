@@ -16,6 +16,7 @@
 #include <wlr/types/wlr_subcompositor.h>
 #include <wlr/util/log.h>
 
+#include "config.h"
 #include "server.h"
 
 static void usage(const char *argv0) {
@@ -101,6 +102,8 @@ int main(int argc, char *argv[]) {
 	server.scene = wlr_scene_create();
 	server.scene_layout =
 		wlr_scene_attach_output_layout(server.scene, server.output_layout);
+	server.tiled = wlr_scene_tree_create(&server.scene->tree);
+	server.master_ratio = master_ratio;
 
 	output_init(&server);
 	xdg_init(&server);

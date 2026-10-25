@@ -7,12 +7,12 @@
  */
 #include <signal.h>
 #include <stdlib.h>
+#include <time.h>
 #include <unistd.h>
 #include <wlr/backend/session.h>
 #include <wlr/types/wlr_data_device.h>
 #include <wlr/types/wlr_input_device.h>
 #include <wlr/types/wlr_pointer.h>
-#include <wlr/util/edges.h>
 #include <wlr/util/log.h>
 #include <xkbcommon/xkbcommon.h>
 
@@ -53,15 +53,12 @@ void spawn(struct tilewl_server *server, const union tilewl_arg *arg) {
 }
 
 void close_focused(struct tilewl_server *server, const union tilewl_arg *arg) {
-	struct wlr_surface *surface = server->seat->keyboard_state.focused_surface;
-	if (surface == NULL) {
-		return;
-	}
-	struct wlr_xdg_toplevel *xdg_toplevel =
-		wlr_xdg_toplevel_try_from_wlr_surface(surface);
-	if (xdg_toplevel != NULL) {
-		/* Politely ask; the client decides when (and whether) to close. */
-		wlr_xdg_toplevel_send_close(xdg_toplevel);
+	if (server->focused != NULL) {
+		/*
+		 * Politely ask; the client decides when (and whether) to close.
+		 * Our state is cleaned up later, in the unmap/destroy handlers.
+		 */
+		wlr_xdg_toplevel_send_close(server->focused->xdg_toplevel);
 	}
 }
 
@@ -255,118 +252,41 @@ static void seat_handle_request_set_selection(struct wl_listener *listener,
 
 /* ---- pointer ----------------------------------------------------------- */
 
-void reset_cursor_mode(struct tilewl_server *server) {
-	server->cursor_mode = TILEWL_CURSOR_PASSTHROUGH;
-	server->grabbed_toplevel = NULL;
-}
-
-void begin_interactive(struct tilewl_toplevel *toplevel,
-		enum tilewl_cursor_mode mode, uint32_t edges) {
-	/*
-	 * Start a compositor-side grab: until the button is released, pointer
-	 * motion moves or resizes this window instead of going to clients.
-	 */
-	struct tilewl_server *server = toplevel->server;
-	server->grabbed_toplevel = toplevel;
-	server->cursor_mode = mode;
-
-	if (mode == TILEWL_CURSOR_MOVE) {
-		server->grab_x = server->cursor->x - toplevel->scene_tree->node.x;
-		server->grab_y = server->cursor->y - toplevel->scene_tree->node.y;
-	} else {
-		struct wlr_box *geo_box = &toplevel->xdg_toplevel->base->geometry;
-		double border_x = (toplevel->scene_tree->node.x + geo_box->x) +
-			((edges & WLR_EDGE_RIGHT) ? geo_box->width : 0);
-		double border_y = (toplevel->scene_tree->node.y + geo_box->y) +
-			((edges & WLR_EDGE_BOTTOM) ? geo_box->height : 0);
-		server->grab_x = server->cursor->x - border_x;
-		server->grab_y = server->cursor->y - border_y;
-
-		server->grab_geobox = *geo_box;
-		server->grab_geobox.x += toplevel->scene_tree->node.x;
-		server->grab_geobox.y += toplevel->scene_tree->node.y;
-		server->resize_edges = edges;
-	}
-}
-
-static void process_cursor_move(struct tilewl_server *server) {
-	struct tilewl_toplevel *toplevel = server->grabbed_toplevel;
-	wlr_scene_node_set_position(&toplevel->scene_tree->node,
-		server->cursor->x - server->grab_x,
-		server->cursor->y - server->grab_y);
-}
-
-static void process_cursor_resize(struct tilewl_server *server) {
-	/*
-	 * Resizing from the top or left edge also moves the window. For
-	 * simplicity we move it immediately rather than waiting for the client
-	 * to commit a buffer at the new size.
-	 */
-	struct tilewl_toplevel *toplevel = server->grabbed_toplevel;
-	double border_x = server->cursor->x - server->grab_x;
-	double border_y = server->cursor->y - server->grab_y;
-	int new_left = server->grab_geobox.x;
-	int new_right = server->grab_geobox.x + server->grab_geobox.width;
-	int new_top = server->grab_geobox.y;
-	int new_bottom = server->grab_geobox.y + server->grab_geobox.height;
-
-	if (server->resize_edges & WLR_EDGE_TOP) {
-		new_top = border_y;
-		if (new_top >= new_bottom) {
-			new_top = new_bottom - 1;
-		}
-	} else if (server->resize_edges & WLR_EDGE_BOTTOM) {
-		new_bottom = border_y;
-		if (new_bottom <= new_top) {
-			new_bottom = new_top + 1;
-		}
-	}
-	if (server->resize_edges & WLR_EDGE_LEFT) {
-		new_left = border_x;
-		if (new_left >= new_right) {
-			new_left = new_right - 1;
-		}
-	} else if (server->resize_edges & WLR_EDGE_RIGHT) {
-		new_right = border_x;
-		if (new_right <= new_left) {
-			new_right = new_left + 1;
-		}
-	}
-
-	struct wlr_box *geo_box = &toplevel->xdg_toplevel->base->geometry;
-	wlr_scene_node_set_position(&toplevel->scene_tree->node,
-		new_left - geo_box->x, new_top - geo_box->y);
-	wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel,
-		new_right - new_left, new_bottom - new_top);
-}
-
 static void process_cursor_motion(struct tilewl_server *server, uint32_t time) {
-	if (server->cursor_mode == TILEWL_CURSOR_MOVE) {
-		process_cursor_move(server);
-		return;
-	} else if (server->cursor_mode == TILEWL_CURSOR_RESIZE) {
-		process_cursor_resize(server);
-		return;
-	}
-
+	/*
+	 * TODO(floating): while an interactive move/resize grab is active,
+	 * move or resize the grabbed window here instead of passing motion on.
+	 */
 	double sx, sy;
 	struct wlr_surface *surface = NULL;
-	struct tilewl_toplevel *toplevel = toplevel_at(server,
-		server->cursor->x, server->cursor->y, &surface, &sx, &sy);
-	if (toplevel == NULL) {
-		/* Over the background: show our own default cursor image. */
-		wlr_cursor_set_xcursor(server->cursor, server->cursor_mgr, "default");
-	}
-	if (surface != NULL) {
+	toplevel_at(server, server->cursor->x, server->cursor->y,
+		&surface, &sx, &sy);
+	if (surface == NULL) {
 		/*
-		 * Pointer focus is separate from keyboard focus. wlroots filters out
-		 * duplicate enter/motion events for us.
+		 * Over the background or a border: no client sets the cursor image
+		 * here, so show our own default one.
 		 */
-		wlr_seat_pointer_notify_enter(server->seat, surface, sx, sy);
-		wlr_seat_pointer_notify_motion(server->seat, time, sx, sy);
-	} else {
+		wlr_cursor_set_xcursor(server->cursor, server->cursor_mgr, "default");
 		wlr_seat_pointer_clear_focus(server->seat);
+		return;
 	}
+	/*
+	 * Pointer focus is separate from keyboard focus. wlroots filters out
+	 * duplicate enter/motion events for us.
+	 */
+	wlr_seat_pointer_notify_enter(server->seat, surface, sx, sy);
+	wlr_seat_pointer_notify_motion(server->seat, time, sx, sy);
+}
+
+void cursor_rebase(struct tilewl_server *server) {
+	/*
+	 * Re-evaluate what is under a pointer that did not move, after windows
+	 * were moved, resized, shown or hidden.
+	 */
+	struct timespec now;
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	uint32_t time_msec = now.tv_sec * 1000 + now.tv_nsec / 1000000;
+	process_cursor_motion(server, time_msec);
 }
 
 static void cursor_handle_motion(struct wl_listener *listener, void *data) {
@@ -398,15 +318,17 @@ static void cursor_handle_button(struct wl_listener *listener, void *data) {
 
 	wlr_seat_pointer_notify_button(server->seat, event->time_msec,
 		event->button, event->state);
-	if (event->state == WL_POINTER_BUTTON_STATE_RELEASED) {
-		reset_cursor_mode(server);
-	} else {
+	if (event->state == WL_POINTER_BUTTON_STATE_PRESSED) {
+		/* Focus follows click: focus whatever window was clicked. */
 		double sx, sy;
 		struct wlr_surface *surface = NULL;
 		struct tilewl_toplevel *toplevel = toplevel_at(server,
 			server->cursor->x, server->cursor->y, &surface, &sx, &sy);
-		focus_toplevel(toplevel);
+		if (toplevel != NULL) {
+			focus_toplevel(server, toplevel);
+		}
 	}
+	/* TODO(floating): on release, end an interactive move/resize grab. */
 }
 
 static void cursor_handle_axis(struct wl_listener *listener, void *data) {
@@ -438,7 +360,6 @@ void input_init(struct tilewl_server *server) {
 	/* Loads xcursor themes and keeps images ready for each output scale. */
 	server->cursor_mgr = wlr_xcursor_manager_create(NULL, 24);
 
-	server->cursor_mode = TILEWL_CURSOR_PASSTHROUGH;
 	server->cursor_motion.notify = cursor_handle_motion;
 	wl_signal_add(&server->cursor->events.motion, &server->cursor_motion);
 	server->cursor_motion_absolute.notify = cursor_handle_motion_absolute;

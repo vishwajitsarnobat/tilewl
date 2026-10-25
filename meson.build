@@ -51,6 +51,7 @@ executable(
 	[
 		'src/main.c',
 		'src/input.c',
+		'src/layout.c',
 		'src/output.c',
 		'src/xdg.c',
 		xdg_shell_header,

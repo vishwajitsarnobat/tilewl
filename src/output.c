@@ -100,7 +100,8 @@ static void server_handle_new_output(struct wl_listener *listener, void *data) {
 	output->destroy.notify = output_handle_destroy;
 	wl_signal_add(&wlr_output->events.destroy, &output->destroy);
 
-	wl_list_insert(&server->outputs, &output->link);
+	/* Append, so the first output plugged in stays first in the list. */
+	wl_list_insert(server->outputs.prev, &output->link);
 
 	/*
 	 * Place the output in the global layout (left to right in hotplug order;
@@ -115,12 +116,31 @@ static void server_handle_new_output(struct wl_listener *listener, void *data) {
 		scene_output);
 }
 
+static void server_handle_layout_change(struct wl_listener *listener,
+		void *data) {
+	/*
+	 * Fired when an output is added to or removed from the layout, or
+	 * changes mode, scale or transform (e.g. the nested window was resized).
+	 * Any of these changes the space we tile into.
+	 *
+	 * TODO(multi-monitor): on hotplug, move the windows of a removed
+	 * output to a remaining one and re-tile every output.
+	 */
+	struct tilewl_server *server =
+		wl_container_of(listener, server, layout_change);
+	arrange(server);
+}
+
 void output_init(struct tilewl_server *server) {
 	wl_list_init(&server->outputs);
 	server->new_output.notify = server_handle_new_output;
 	wl_signal_add(&server->backend->events.new_output, &server->new_output);
+	server->layout_change.notify = server_handle_layout_change;
+	wl_signal_add(&server->output_layout->events.change,
+		&server->layout_change);
 }
 
 void output_finish(struct tilewl_server *server) {
 	wl_list_remove(&server->new_output.link);
+	wl_list_remove(&server->layout_change.link);
 }
