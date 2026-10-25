@@ -48,7 +48,13 @@ xdg_shell_header = custom_target(
 
 executable(
 	'tilewl',
-	['src/tinywl.c', xdg_shell_header],
+	[
+		'src/main.c',
+		'src/input.c',
+		'src/output.c',
+		'src/xdg.c',
+		xdg_shell_header,
+	],
 	dependencies: [wlroots, wayland_server, xkbcommon],
 	install: true,
 )
