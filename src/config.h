@@ -31,6 +31,15 @@ static const float master_ratio = 0.55f;
 static const char *const termcmd[] = {"foot", NULL};
 
 /*
+ * Mod+N shows workspace N, Mod+Shift+N moves the focused window there.
+ * Workspaces are numbered 1..9 on the keyboard and 0..8 internally.
+ */
+#define NUM_WORKSPACES 9
+#define WORKSPACE_KEYS(keysym, index) \
+	{ MODKEY,         keysym, view_workspace,    { .ui = index } }, \
+	{ MODKEY | SHIFT, keysym, move_to_workspace, { .ui = index } }
+
+/*
  * Keys are matched on the unshifted keysym (level 1 of the keymap), so
  * write lowercase letters and plain digits even for Shift bindings:
  * {MODKEY | SHIFT, XKB_KEY_c, ...} is Mod+Shift+c.
@@ -45,6 +54,15 @@ static const struct tilewl_key keys[] = {
 	{ MODKEY,         XKB_KEY_l,       set_master_ratio, { .f = +RATIO_STEP } },
 	{ MODKEY,         XKB_KEY_Return,  zoom,             { 0 } },
 	/* TODO(floating): { MODKEY, XKB_KEY_space, toggle_floating, { 0 } }, */
+	WORKSPACE_KEYS(XKB_KEY_1, 0),
+	WORKSPACE_KEYS(XKB_KEY_2, 1),
+	WORKSPACE_KEYS(XKB_KEY_3, 2),
+	WORKSPACE_KEYS(XKB_KEY_4, 3),
+	WORKSPACE_KEYS(XKB_KEY_5, 4),
+	WORKSPACE_KEYS(XKB_KEY_6, 5),
+	WORKSPACE_KEYS(XKB_KEY_7, 6),
+	WORKSPACE_KEYS(XKB_KEY_8, 7),
+	WORKSPACE_KEYS(XKB_KEY_9, 8),
 	{ MODKEY | SHIFT, XKB_KEY_q,       quit,             { 0 } },
 };
 

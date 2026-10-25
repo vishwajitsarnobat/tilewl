@@ -85,6 +85,12 @@ struct tilewl_server {
 
 	/* Layout (layout.c) */
 	float master_ratio; /* fraction of the width given to the master */
+	/*
+	 * Index of the workspace being shown, 0 .. NUM_WORKSPACES - 1. A window
+	 * is visible when its own workspace index equals this one.
+	 * TODO(multi-monitor): move this into struct tilewl_output.
+	 */
+	unsigned int workspace;
 
 	/* Pointer (input.c) */
 	struct wlr_cursor *cursor;
@@ -145,6 +151,7 @@ struct tilewl_toplevel {
 	struct wlr_scene_rect *border[4];
 
 	struct wlr_box geometry; /* last tile from the layout, incl. border */
+	unsigned int workspace;
 	bool mapped;
 	/* TODO(floating): bool floating; skipped by the tiler. */
 
@@ -229,6 +236,9 @@ void quit(struct tilewl_server *server, const union tilewl_arg *arg);
 void focus_stack(struct tilewl_server *server, const union tilewl_arg *arg);
 void zoom(struct tilewl_server *server, const union tilewl_arg *arg);
 void set_master_ratio(struct tilewl_server *server,
+	const union tilewl_arg *arg);
+void view_workspace(struct tilewl_server *server, const union tilewl_arg *arg);
+void move_to_workspace(struct tilewl_server *server,
 	const union tilewl_arg *arg);
 
 #endif

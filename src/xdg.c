@@ -173,13 +173,14 @@ static void toplevel_handle_map(struct wl_listener *listener, void *data) {
 	struct tilewl_server *server = toplevel->server;
 
 	toplevel->mapped = true;
+	toplevel->workspace = server->workspace;
 	/*
 	 * As in dwm, a new window becomes the master and the previous master
 	 * moves to the top of the stack.
 	 */
 	wl_list_insert(&server->toplevels, &toplevel->link);
-	wlr_scene_node_set_enabled(&toplevel->scene_tree->node, true);
 
+	/* arrange() also enables the window's scene node. */
 	arrange(server);
 	focus_toplevel(server, toplevel);
 }

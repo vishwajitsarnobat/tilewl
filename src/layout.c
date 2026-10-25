@@ -13,14 +13,22 @@
  * The first visible window in server->toplevels is the master; the rest
  * share the right-hand column equally. arrange() is cheap and stateless, so
  * we simply call it after anything that could change the layout: map,
- * unmap, output resize, and the layout keybindings.
+ * unmap, output resize, workspace switches and the layout keybindings.
+ *
+ * Workspaces are just an index per window. Switching workspaces does not
+ * touch the clients at all: arrange() disables the scene nodes of windows
+ * on other workspaces, so the scene graph skips them when rendering and
+ * when looking up what is under the pointer.
  */
 #include <wlr/util/box.h>
 
+#include "config.h"
 #include "server.h"
 
 bool toplevel_is_visible(const struct tilewl_toplevel *toplevel) {
-	return toplevel->mapped;
+	/* TODO(floating): floating windows are visible but not tiled. */
+	return toplevel->mapped &&
+		toplevel->workspace == toplevel->server->workspace;
 }
 
 struct tilewl_toplevel *first_visible(struct tilewl_server *server) {
@@ -89,10 +97,13 @@ void arrange(struct tilewl_server *server) {
 	 * (output->usable_area) before tiling.
 	 */
 
+	/* Show this workspace's windows, hide everything else. */
 	int n = 0;
 	struct tilewl_toplevel *toplevel;
 	wl_list_for_each(toplevel, &server->toplevels, link) {
-		if (toplevel_is_visible(toplevel)) {
+		bool visible = toplevel_is_visible(toplevel);
+		wlr_scene_node_set_enabled(&toplevel->scene_tree->node, visible);
+		if (visible) {
 			n++;
 		}
 	}
@@ -187,5 +198,31 @@ void set_master_ratio(struct tilewl_server *server,
 		return;
 	}
 	server->master_ratio = ratio;
+	arrange(server);
+}
+
+void view_workspace(struct tilewl_server *server, const union tilewl_arg *arg) {
+	if (arg->ui >= NUM_WORKSPACES || arg->ui == server->workspace) {
+		return;
+	}
+	server->workspace = arg->ui;
+	arrange(server);
+	/* Focus the master of the new workspace, or nothing if it is empty. */
+	focus_toplevel(server, first_visible(server));
+}
+
+void move_to_workspace(struct tilewl_server *server,
+		const union tilewl_arg *arg) {
+	struct tilewl_toplevel *toplevel = server->focused;
+	if (toplevel == NULL || arg->ui >= NUM_WORKSPACES ||
+			arg->ui == toplevel->workspace) {
+		return;
+	}
+	toplevel->workspace = arg->ui;
+	/*
+	 * The window is no longer visible here, so first_visible() skips it
+	 * and focus moves to the master of the current workspace.
+	 */
+	focus_toplevel(server, first_visible(server));
 	arrange(server);
 }
