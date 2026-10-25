@@ -140,8 +140,11 @@ struct tilewl_toplevel {
 	 * destroys itself when the xdg_surface goes away.
 	 */
 	struct wlr_scene_tree *surface_tree;
+	struct wlr_scene_tree *popup_tree;
+	/* Top, bottom, left, right. Children of scene_tree, so ours to keep. */
+	struct wlr_scene_rect *border[4];
 
-	struct wlr_box geometry; /* last size/position from the layout */
+	struct wlr_box geometry; /* last tile from the layout, incl. border */
 	bool mapped;
 	/* TODO(floating): bool floating; skipped by the tiler. */
 

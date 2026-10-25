@@ -18,6 +18,11 @@
 #define MODKEY WLR_MODIFIER_ALT
 #define SHIFT WLR_MODIFIER_SHIFT
 
+/* Window borders: width in pixels, colours as RGBA in [0, 1]. */
+static const int border_width = 2;
+static const float border_color_focused[4] = {0.37f, 0.56f, 0.89f, 1.0f};
+static const float border_color_unfocused[4] = {0.25f, 0.25f, 0.28f, 1.0f};
+
 /* Initial fraction of the output width given to the master window. */
 static const float master_ratio = 0.55f;
 /* How much Mod+h / Mod+l change it per press. */

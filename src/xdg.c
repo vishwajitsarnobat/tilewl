@@ -15,9 +15,17 @@
 #include <wlr/util/edges.h>
 #include <wlr/util/log.h>
 
+#include "config.h"
 #include "server.h"
 
 /* ---- focus and geometry ------------------------------------------------ */
+
+static void toplevel_set_border_color(struct tilewl_toplevel *toplevel,
+		const float color[static 4]) {
+	for (int i = 0; i < 4; i++) {
+		wlr_scene_rect_set_color(toplevel->border[i], color);
+	}
+}
 
 void focus_toplevel(struct tilewl_server *server,
 		struct tilewl_toplevel *toplevel) {
@@ -32,6 +40,7 @@ void focus_toplevel(struct tilewl_server *server,
 	if (prev != NULL) {
 		/* Let the old window draw itself as inactive (e.g. hide the caret). */
 		wlr_xdg_toplevel_set_activated(prev->xdg_toplevel, false);
+		toplevel_set_border_color(prev, border_color_unfocused);
 	}
 
 	server->focused = toplevel;
@@ -42,6 +51,7 @@ void focus_toplevel(struct tilewl_server *server,
 
 	/* TODO(floating): raise a focused floating window to the top here. */
 	wlr_xdg_toplevel_set_activated(toplevel->xdg_toplevel, true);
+	toplevel_set_border_color(toplevel, border_color_focused);
 
 	/*
 	 * From here on wlroots routes key events to this surface. The enter
@@ -70,23 +80,53 @@ static void toplevel_update_clip(struct tilewl_toplevel *toplevel) {
 	struct wlr_box clip = {
 		.x = geo->x,
 		.y = geo->y,
-		.width = toplevel->geometry.width,
-		.height = toplevel->geometry.height,
+		.width = toplevel->geometry.width - 2 * border_width,
+		.height = toplevel->geometry.height - 2 * border_width,
 	};
 	wlr_scene_subsurface_tree_set_clip(&toplevel->surface_tree->node, &clip);
 }
 
 void toplevel_set_geometry(struct tilewl_toplevel *toplevel,
 		struct wlr_box box) {
+	/* Keep at least 1x1 pixels for the client even in a tiny tile. */
+	int bw = border_width;
+	if (box.width < 2 * bw + 1) {
+		box.width = 2 * bw + 1;
+	}
+	if (box.height < 2 * bw + 1) {
+		box.height = 2 * bw + 1;
+	}
 	toplevel->geometry = box;
+	int inner_width = box.width - 2 * bw;
+	int inner_height = box.height - 2 * bw;
+
+	/*
+	 * Everything below is relative to the container, so the whole window
+	 * moves with this one call.
+	 */
 	wlr_scene_node_set_position(&toplevel->scene_tree->node, box.x, box.y);
+
+	/* Four solid rects frame the client area. */
+	wlr_scene_rect_set_size(toplevel->border[0], box.width, bw);
+	wlr_scene_rect_set_size(toplevel->border[1], box.width, bw);
+	wlr_scene_node_set_position(&toplevel->border[1]->node,
+		0, box.height - bw);
+	wlr_scene_rect_set_size(toplevel->border[2], bw, inner_height);
+	wlr_scene_node_set_position(&toplevel->border[2]->node, 0, bw);
+	wlr_scene_rect_set_size(toplevel->border[3], bw, inner_height);
+	wlr_scene_node_set_position(&toplevel->border[3]->node,
+		box.width - bw, bw);
+
+	wlr_scene_node_set_position(&toplevel->surface_tree->node, bw, bw);
+	wlr_scene_node_set_position(&toplevel->popup_tree->node, bw, bw);
 
 	/*
 	 * Ask the client to resize. This only queues a configure event; the
 	 * client draws a buffer at the new size whenever it is ready, so for a
 	 * frame or two the old buffer may still be shown (clipped).
 	 */
-	wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, box.width, box.height);
+	wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel,
+		inner_width, inner_height);
 	toplevel_update_clip(toplevel);
 }
 
@@ -209,8 +249,8 @@ static void toplevel_handle_destroy(struct wl_listener *listener, void *data) {
 	wl_list_remove(&toplevel->request_fullscreen.link);
 
 	/*
-	 * The container tree is ours. Destroying it also destroys the surface
-	 * tree inside it; the scene helper notices via its own node-destroy
+	 * The container tree is ours. Destroying it also destroys the borders,
+	 * the popup tree and the surface tree inside it; the scene helper notices via its own node-destroy
 	 * listener and cleans up, so this is safe whether or not wlroots has
 	 * already torn the surface tree down.
 	 */
@@ -284,6 +324,7 @@ static void server_handle_new_toplevel(struct wl_listener *listener,
 	 * Scene layout of one window:
 	 *
 	 *   scene_tree      (ours; positioned by the layout, data = toplevel)
+	 *   |- border[0..3] (solid colour rects around the client area)
 	 *   |- surface_tree (wlroots' mirror of the surface + subsurfaces)
 	 *   `- popup_tree   (parent for popups, so the clip on surface_tree
 	 *                    does not crop menus that extend past the tile)
@@ -293,12 +334,16 @@ static void server_handle_new_toplevel(struct wl_listener *listener,
 	toplevel->scene_tree = wlr_scene_tree_create(server->tiled);
 	toplevel->scene_tree->node.data = toplevel;
 	wlr_scene_node_set_enabled(&toplevel->scene_tree->node, false);
+	for (int i = 0; i < 4; i++) {
+		/* Sized in toplevel_set_geometry(). */
+		toplevel->border[i] = wlr_scene_rect_create(toplevel->scene_tree,
+			0, 0, border_color_unfocused);
+	}
 	toplevel->surface_tree = wlr_scene_xdg_surface_create(
 		toplevel->scene_tree, xdg_toplevel->base);
-	struct wlr_scene_tree *popup_tree =
-		wlr_scene_tree_create(toplevel->scene_tree);
+	toplevel->popup_tree = wlr_scene_tree_create(toplevel->scene_tree);
 	/* Lets new popups find the tree they should attach to. */
-	xdg_toplevel->base->data = popup_tree;
+	xdg_toplevel->base->data = toplevel->popup_tree;
 
 	struct wlr_surface *surface = xdg_toplevel->base->surface;
 	toplevel->map.notify = toplevel_handle_map;
