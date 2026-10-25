@@ -39,6 +39,7 @@
 #include <wlr/types/wlr_seat.h>
 #include <wlr/types/wlr_xcursor_manager.h>
 #include <wlr/types/wlr_xdg_shell.h>
+#include <xkbcommon/xkbcommon.h>
 
 enum tilewl_cursor_mode {
 	TILEWL_CURSOR_PASSTHROUGH,
@@ -49,6 +50,8 @@ enum tilewl_cursor_mode {
 struct tilewl_server {
 	struct wl_display *wl_display;
 	struct wlr_backend *backend;
+	/* Logind/seatd session; NULL when running nested (no VT to switch). */
+	struct wlr_session *session;
 	struct wlr_renderer *renderer;
 	struct wlr_allocator *allocator;
 
@@ -135,6 +138,24 @@ struct tilewl_keyboard {
 };
 
 /*
+ * Keybindings. config.h holds a table of these; input.c looks a key press
+ * up in it and calls the action with its argument.
+ */
+union tilewl_arg {
+	int i;
+	float f;
+	unsigned int ui;
+	const void *v;
+};
+
+struct tilewl_key {
+	uint32_t modifiers; /* WLR_MODIFIER_* mask */
+	xkb_keysym_t keysym;
+	void (*action)(struct tilewl_server *server, const union tilewl_arg *arg);
+	union tilewl_arg arg;
+};
+
+/*
  * Each module registers its server-wide listeners in *_init() and unlinks
  * them again in *_finish(). main() calls the finish functions before
  * destroying the wlroots objects those listeners are attached to.
@@ -150,6 +171,11 @@ void input_finish(struct tilewl_server *server);
 void begin_interactive(struct tilewl_toplevel *toplevel,
 	enum tilewl_cursor_mode mode, uint32_t edges);
 void reset_cursor_mode(struct tilewl_server *server);
+
+/* Keybinding actions (input.c) */
+void spawn(struct tilewl_server *server, const union tilewl_arg *arg);
+void close_focused(struct tilewl_server *server, const union tilewl_arg *arg);
+void quit(struct tilewl_server *server, const union tilewl_arg *arg);
 
 /* xdg.c */
 void xdg_init(struct tilewl_server *server);

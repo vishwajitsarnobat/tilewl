@@ -7,6 +7,7 @@
  * the event loop, and tears everything down in a safe order afterwards.
  */
 #include <getopt.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -52,10 +53,11 @@ int main(int argc, char *argv[]) {
 	/*
 	 * The backend abstracts input and output hardware. autocreate picks DRM
 	 * + libinput on a TTY, or opens a window if WAYLAND_DISPLAY or DISPLAY
-	 * points at a running session.
+	 * points at a running session. On a TTY it also opens a seat session
+	 * (logind or seatd) for device access and VT switching.
 	 */
 	server.backend = wlr_backend_autocreate(
-		wl_display_get_event_loop(server.wl_display), NULL);
+		wl_display_get_event_loop(server.wl_display), &server.session);
 	if (server.backend == NULL) {
 		wlr_log(WLR_ERROR, "failed to create wlr_backend");
 		return 1;
@@ -120,12 +122,17 @@ int main(int argc, char *argv[]) {
 		return 1;
 	}
 
+	/*
+	 * We never wait() for the programs we spawn. Ignoring SIGCHLD makes the
+	 * kernel reap them as they exit instead of leaving zombies around.
+	 */
+	signal(SIGCHLD, SIG_IGN);
+
+	/* Children inherit the environment, so they connect to us. */
 	setenv("WAYLAND_DISPLAY", socket, true);
 	if (startup_cmd != NULL) {
-		if (fork() == 0) {
-			execl("/bin/sh", "/bin/sh", "-c", startup_cmd, (void *)NULL);
-			_exit(1);
-		}
+		const char *const argv[] = {"/bin/sh", "-c", startup_cmd, NULL};
+		spawn(&server, &(union tilewl_arg){ .v = argv });
 	}
 
 	wlr_log(WLR_INFO, "Running Wayland compositor on WAYLAND_DISPLAY=%s",

@@ -5,7 +5,10 @@
  * presses are either compositor bindings or forwarded to the focused client
  * through the wlr_seat, which tracks focus and speaks the wl_seat protocol.
  */
+#include <signal.h>
 #include <stdlib.h>
+#include <unistd.h>
+#include <wlr/backend/session.h>
 #include <wlr/types/wlr_data_device.h>
 #include <wlr/types/wlr_input_device.h>
 #include <wlr/types/wlr_pointer.h>
@@ -13,29 +16,93 @@
 #include <wlr/util/log.h>
 #include <xkbcommon/xkbcommon.h>
 
+#include "config.h"
 #include "server.h"
+
+#define ARRAY_LEN(a) (sizeof(a) / sizeof((a)[0]))
+
+/*
+ * Lock modifiers are state, not chords: Mod+j must still work with Caps Lock
+ * or Num Lock (MOD2) on, so strip them before comparing against keys[].
+ */
+#define IGNORED_MODIFIERS (WLR_MODIFIER_CAPS | WLR_MODIFIER_MOD2)
+
+/* ---- keybinding actions ------------------------------------------------ */
+
+void spawn(struct tilewl_server *server, const union tilewl_arg *arg) {
+	const char *const *argv = arg->v;
+
+	pid_t pid = fork();
+	if (pid < 0) {
+		wlr_log_errno(WLR_ERROR, "fork failed");
+		return;
+	}
+	if (pid == 0) {
+		/*
+		 * In the child: start a new session so the program is not tied to
+		 * our controlling terminal, and undo the SIGCHLD = SIG_IGN set in
+		 * main(), since ignored dispositions survive exec and would break
+		 * programs (shells) that wait for their own children.
+		 */
+		setsid();
+		signal(SIGCHLD, SIG_DFL);
+		execvp(argv[0], (char *const *)argv);
+		wlr_log_errno(WLR_ERROR, "failed to exec %s", argv[0]);
+		_exit(127);
+	}
+}
+
+void close_focused(struct tilewl_server *server, const union tilewl_arg *arg) {
+	struct wlr_surface *surface = server->seat->keyboard_state.focused_surface;
+	if (surface == NULL) {
+		return;
+	}
+	struct wlr_xdg_toplevel *xdg_toplevel =
+		wlr_xdg_toplevel_try_from_wlr_surface(surface);
+	if (xdg_toplevel != NULL) {
+		/* Politely ask; the client decides when (and whether) to close. */
+		wlr_xdg_toplevel_send_close(xdg_toplevel);
+	}
+}
+
+void quit(struct tilewl_server *server, const union tilewl_arg *arg) {
+	/* Makes wl_display_run() return; main() then tears down. */
+	wl_display_terminate(server->wl_display);
+}
 
 /* ---- keyboard ---------------------------------------------------------- */
 
-static bool handle_keybinding(struct tilewl_server *server, xkb_keysym_t sym) {
-	/* Called with Alt held down. */
-	switch (sym) {
-	case XKB_KEY_Escape:
-		wl_display_terminate(server->wl_display);
-		break;
-	case XKB_KEY_F1:
-		/* Cycle to the next toplevel. */
-		if (wl_list_length(&server->toplevels) < 2) {
-			break;
+static bool handle_vt_switch(struct tilewl_server *server,
+		const xkb_keysym_t *syms, int nsyms) {
+	/*
+	 * The default keymap turns Ctrl+Alt+F<n> into XF86Switch_VT_<n>. On a
+	 * TTY we must implement switching ourselves: we hold DRM master, so the
+	 * kernel's own VT shortcuts are not in effect. Nested, there is no
+	 * session and the parent compositor owns the VTs.
+	 */
+	for (int i = 0; i < nsyms; i++) {
+		if (syms[i] >= XKB_KEY_XF86Switch_VT_1 &&
+				syms[i] <= XKB_KEY_XF86Switch_VT_12) {
+			if (server->session != NULL) {
+				unsigned int vt = syms[i] - XKB_KEY_XF86Switch_VT_1 + 1;
+				wlr_session_change_vt(server->session, vt);
+			}
+			return true;
 		}
-		struct tilewl_toplevel *next =
-			wl_container_of(server->toplevels.prev, next, link);
-		focus_toplevel(next);
-		break;
-	default:
-		return false;
 	}
-	return true;
+	return false;
+}
+
+static bool handle_keybinding(struct tilewl_server *server,
+		uint32_t modifiers, xkb_keysym_t sym) {
+	modifiers &= ~IGNORED_MODIFIERS;
+	for (size_t i = 0; i < ARRAY_LEN(keys); i++) {
+		if (keys[i].keysym == sym && keys[i].modifiers == modifiers) {
+			keys[i].action(server, &keys[i].arg);
+			return true;
+		}
+	}
+	return false;
 }
 
 static void keyboard_handle_modifiers(struct wl_listener *listener,
@@ -55,24 +122,36 @@ static void keyboard_handle_key(struct wl_listener *listener, void *data) {
 	struct tilewl_keyboard *keyboard = wl_container_of(listener, keyboard, key);
 	struct tilewl_server *server = keyboard->server;
 	struct wlr_keyboard_key_event *event = data;
+	struct wlr_keyboard *wlr_keyboard = keyboard->wlr_keyboard;
 
 	/* libinput keycodes are evdev codes; xkb's are offset by 8. */
 	uint32_t keycode = event->keycode + 8;
-	const xkb_keysym_t *syms;
-	int nsyms = xkb_state_key_get_syms(keyboard->wlr_keyboard->xkb_state,
-		keycode, &syms);
 
 	bool handled = false;
-	uint32_t modifiers = wlr_keyboard_get_modifiers(keyboard->wlr_keyboard);
-	if ((modifiers & WLR_MODIFIER_ALT) &&
-			event->state == WL_KEYBOARD_KEY_STATE_PRESSED) {
-		for (int i = 0; i < nsyms; i++) {
-			handled = handle_keybinding(server, syms[i]);
+	if (event->state == WL_KEYBOARD_KEY_STATE_PRESSED) {
+		/* Keysyms with modifiers applied: Ctrl+Alt+F1 -> XF86Switch_VT_1. */
+		const xkb_keysym_t *syms;
+		int nsyms = xkb_state_key_get_syms(wlr_keyboard->xkb_state,
+			keycode, &syms);
+		handled = handle_vt_switch(server, syms, nsyms);
+
+		/*
+		 * Bindings use the unshifted keysym, so Mod+Shift+1 is reported as
+		 * "1" rather than "!" (which differs between layouts).
+		 */
+		const xkb_keysym_t *base_syms;
+		xkb_layout_index_t layout =
+			xkb_state_key_get_layout(wlr_keyboard->xkb_state, keycode);
+		int nbase = xkb_keymap_key_get_syms_by_level(wlr_keyboard->keymap,
+			keycode, layout, 0, &base_syms);
+		uint32_t modifiers = wlr_keyboard_get_modifiers(wlr_keyboard);
+		for (int i = 0; i < nbase && !handled; i++) {
+			handled = handle_keybinding(server, modifiers, base_syms[i]);
 		}
 	}
 
 	if (!handled) {
-		wlr_seat_set_keyboard(server->seat, keyboard->wlr_keyboard);
+		wlr_seat_set_keyboard(server->seat, wlr_keyboard);
 		wlr_seat_keyboard_notify_key(server->seat, event->time_msec,
 			event->keycode, event->state);
 	}
