@@ -1,0 +1,6 @@
+/build*/
+/subprojects/
+*.o
+compile_commands.json
+.cache/
+.claude/
