@@ -48,10 +48,12 @@ static const struct tilewl_key keys[] = {
 	/* modifiers      keysym           action            argument */
 	{ MODKEY | SHIFT, XKB_KEY_Return,  spawn,            { .v = termcmd } },
 	{ MODKEY | SHIFT, XKB_KEY_c,       close_focused,    { 0 } },
-	{ MODKEY,         XKB_KEY_j,       focus_stack,      { .i = +1 } },
-	{ MODKEY,         XKB_KEY_k,       focus_stack,      { .i = -1 } },
-	{ MODKEY,         XKB_KEY_h,       set_master_ratio, { .f = -RATIO_STEP } },
-	{ MODKEY,         XKB_KEY_l,       set_master_ratio, { .f = +RATIO_STEP } },
+	{ MODKEY,         XKB_KEY_j,       focus_stack,      { .direction = FOCUS_DOWN } },
+	{ MODKEY,         XKB_KEY_k,       focus_stack,      { .direction = FOCUS_UP } },
+	{ MODKEY,         XKB_KEY_h,       focus_stack, 	 { .direction = FOCUS_LEFT } },
+	{ MODKEY,         XKB_KEY_l,       focus_stack, 	 { .direction = FOCUS_RIGHT } },
+	{ MODKEY | SHIFT,         XKB_KEY_h,       set_master_ratio, { .f = -RATIO_STEP } },
+	{ MODKEY | SHIFT,         XKB_KEY_l,       set_master_ratio, { .f = +RATIO_STEP } },
 	{ MODKEY,         XKB_KEY_Return,  zoom,             { 0 } },
 	/* TODO(floating): { MODKEY, XKB_KEY_space, toggle_floating, { 0 } }, */
 	WORKSPACE_KEYS(XKB_KEY_1, 0),

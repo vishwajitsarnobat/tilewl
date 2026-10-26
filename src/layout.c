@@ -20,7 +20,9 @@
  * on other workspaces, so the scene graph skips them when rendering and
  * when looking up what is under the pointer.
  */
+#include <time.h>
 #include <wlr/util/box.h>
+#include <stdlib.h>
 
 #include "config.h"
 #include "server.h"
@@ -41,6 +43,47 @@ struct tilewl_toplevel *first_visible(struct tilewl_server *server) {
 	return NULL;
 }
 
+// TODO: replace visible_after with find_window(server, server->focused, enum FOCUS_DIRECTION direction);
+static struct tilewl_toplevel *find_window(struct tilewl_server * server, struct tilewl_toplevel *from, enum focus_direction direction)
+{
+	if (from == NULL) {
+		return first_visible(server);
+	}
+
+	int cf_x = from->geometry.x + from->geometry.width / 2;
+	int cf_y = from->geometry.y + from->geometry.height / 2;
+	struct tilewl_toplevel *candidate;
+	struct tilewl_toplevel *best = NULL;
+	int best_score = 1e9;
+
+	wl_list_for_each(candidate, &server->toplevels, link) {
+		int cc_x = candidate->geometry.x + candidate->geometry.width / 2;
+		int cc_y = candidate->geometry.y + candidate->geometry.height / 2;
+		switch (direction) {
+			case FOCUS_UP:
+				if (cc_y >= cf_y) continue;
+				break;
+			case FOCUS_DOWN:
+				if (cc_y <= cf_y) continue;
+				break;
+			case FOCUS_LEFT:
+				if (cc_x >= cf_x) continue;
+				break;
+			case FOCUS_RIGHT:
+				if (cc_x <= cf_x) continue;
+				break;
+			default:
+				break;
+		}
+		int score = abs(cc_x - cf_x) + abs(cc_y - cf_y);
+		
+		if (score < best_score) {
+			score = best_score;
+			best = candidate;
+		}
+	}
+	return best;
+}
 /*
  * The next visible toplevel after `from` in tiling order, going forwards
  * (dir > 0) or backwards (dir < 0) and wrapping around. Returns NULL if
@@ -50,10 +93,13 @@ static struct tilewl_toplevel *visible_after(struct tilewl_server *server,
 		struct tilewl_toplevel *from, int dir) {
 	struct wl_list *pos = &from->link;
 	for (;;) {
+		// Iterate through the linked list of windows based on direction
 		pos = dir > 0 ? pos->next : pos->prev;
+		// This will hit only if there is 1 window
 		if (pos == &from->link) {
 			return NULL;
 		}
+		// Check whether the pos == head of the linked list (not a window).
 		if (pos == &server->toplevels) {
 			/* The list head is a sentinel, not a toplevel; step over it. */
 			continue;
@@ -160,8 +206,8 @@ void focus_stack(struct tilewl_server *server, const union tilewl_arg *arg) {
 		focus_toplevel(server, first_visible(server));
 		return;
 	}
-	struct tilewl_toplevel *next =
-		visible_after(server, server->focused, arg->i);
+	struct tilewl_toplevel *next = find_window(server, server->focused, arg->direction);
+		//visible_after(server, server->focused, arg->i);
 	if (next != NULL) {
 		focus_toplevel(server, next);
 	}

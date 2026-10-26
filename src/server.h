@@ -180,11 +180,21 @@ struct tilewl_keyboard {
 	struct wl_listener destroy;
 };
 
+/* Enum class to hold direction of focus (in future can be extended to just direction)
+ */
+enum focus_direction {
+	FOCUS_UP,
+	FOCUS_DOWN,
+	FOCUS_LEFT,
+	FOCUS_RIGHT
+};
+
 /*
  * Keybindings. config.h holds a table of these; input.c looks a key press
  * up in it and calls the action with its argument.
  */
 union tilewl_arg {
+	enum focus_direction direction;
 	int i;
 	float f;
 	unsigned int ui;
