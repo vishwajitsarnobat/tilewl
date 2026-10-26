@@ -41,6 +41,7 @@
 #include <wlr/types/wlr_xdg_shell.h>
 #include <xkbcommon/xkbcommon.h>
 
+// TODO: create a toplevel prev_focus to store previously focused window
 struct tilewl_server {
 	struct wl_display *wl_display;
 	struct wlr_backend *backend;
