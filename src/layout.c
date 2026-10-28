@@ -59,26 +59,42 @@ static struct tilewl_toplevel *find_window(struct tilewl_server * server, struct
 	wl_list_for_each(candidate, &server->toplevels, link) {
 		int cc_x = candidate->geometry.x + candidate->geometry.width / 2;
 		int cc_y = candidate->geometry.y + candidate->geometry.height / 2;
+
+		int dx = cc_x - cf_x;
+		int dy = cc_y - cf_y;
+		int primary;
+		int perpendicular;
 		switch (direction) {
 			case FOCUS_UP:
-				if (cc_y >= cf_y) continue;
+				if (dy >= 0) continue;
+				primary = -dy;
+				perpendicular = abs(dx);
 				break;
 			case FOCUS_DOWN:
-				if (cc_y <= cf_y) continue;
+				if (dy <= 0) continue;
+				primary = dy;
+				perpendicular = abs(dx);
 				break;
 			case FOCUS_LEFT:
-				if (cc_x >= cf_x) continue;
+				if (dx >= 0) continue;
+				primary = -dx;
+				perpendicular = abs(dy);
 				break;
 			case FOCUS_RIGHT:
-				if (cc_x <= cf_x) continue;
+				if (dx <= 0) continue;
+				primary = dx;
+				perpendicular = abs(dy);
 				break;
 			default:
 				break;
 		}
-		int score = abs(cc_x - cf_x) + abs(cc_y - cf_y);
+
+		if (dx == 0 && dy == 0) continue;
+
+		int score = primary + 2 * perpendicular;
 		
 		if (score < best_score) {
-			score = best_score;
+			best_score = score;
 			best = candidate;
 		}
 	}
