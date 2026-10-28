@@ -131,6 +131,7 @@ struct tilewl_output {
 	 */
 };
 
+// TODO: arrange the windows in a tree format rather than a linked list.
 struct tilewl_toplevel {
 	struct wl_list link; /* server->toplevels, only while mapped */
 	struct tilewl_server *server;
